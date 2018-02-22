@@ -1,5 +1,32 @@
 #define MAX_ANALOG 7
 #define MAX_DIGITAL 13
+struct PinType {
+	char type;
+	int number;
+
+	bool configured;
+};
+
+struct LevelPin {
+	char polarity;
+	struct PinType pin;
+};
+struct PWMPin {
+	int dutycycle;
+	struct PinType pin;
+};
+struct PulsePin {
+	char firstPolarity;
+	char secondPolarity;
+	long firstHalf;
+	long secondHalf;
+	char state;
+	int repeat;
+	int currRepeat;
+	unsigned long start;
+	struct PinType pin;
+};
+
 int read_line(char* buffer, int bufsize)
 {
 	for (int index = 0; index < bufsize; index++) {
@@ -38,13 +65,37 @@ int read_line(char* buffer, int bufsize)
 
 const int LINE_BUFFER_SIZE = 80; // max line length is one less than this
 
+struct PulsePin pulsePin;
+#if 0
+= {
+	.firstPolarity=HIGH,
+	.secondPolarity=LOW,
+	.firstHalf = 200,
+	.secondHalf = 100, 
+	.repeat = 5,
+	.state='F'
+};
+#endif
 void setup() {
 	Serial.begin(57600);
+
+
+	pulsePin.firstPolarity=HIGH;
+	pulsePin.secondPolarity=LOW;
+	pulsePin.firstHalf = 200;
+	pulsePin.secondHalf = 100;
+	pulsePin.repeat = 5000;
+	pulsePin.state='I';
+	pulsePin.pin.type='D';
+	pulsePin.pin.number=3;
+	pulsePin.pin.configured=false;
+	pinMode(3,OUTPUT);
+
+
+
+
 }
-struct PinType {
-	char type;
-	int number;
-};
+
 int getPin(char *str, struct PinType *pin) {
 	char pinString[3];
 	int rc=0;
@@ -74,7 +125,7 @@ int getPin(char *str, struct PinType *pin) {
 int  validateLevel(char *str){
 	int rc = 0;
 	if (str == NULL) {
-			Serial.println("Error: no level supplied");
+		Serial.println("Error: no level supplied");
 		rc = -1;
 	}
 	else {
@@ -110,9 +161,9 @@ long getDuration(char *str) {
 	}
 
 	if (rc) rc = atoi(str)*multiplier;
-	
+
 	return rc;
-	
+
 }
 
 void parseCommand() {
@@ -152,7 +203,7 @@ void parseCommand() {
 			long postDuration=0;
 			pch = strtok (NULL, " ");
 			if ((level = validateLevel(pch)) < 0){
-				
+
 			}
 			else if (( pulseDuration = getDuration(pch = strtok (NULL, " "))) < 0){
 				Serial.print("error pulseDuration: ");
@@ -161,17 +212,17 @@ void parseCommand() {
 				Serial.print("error postDuration: ");
 			}
 			else {
-				 repeat = atoi(pch = strtok (NULL, " "));
+				repeat = atoi(pch = strtok (NULL, " "));
 			}
 			Serial.print("pulseDuration: ");Serial.println(pulseDuration);
 			Serial.print("postDuration: ");Serial.println(postDuration);
 			Serial.print("repeat: ");Serial.println(repeat);
 
 
-//				if (pin.type == 'D') {
-//					pinMode(pin.number,OUTPUT);
-//					digitalWrite(pin.number,(level==0)?LOW:HIGH);
-//				}
+			//				if (pin.type == 'D') {
+			//					pinMode(pin.number,OUTPUT);
+			//					digitalWrite(pin.number,(level==0)?LOW:HIGH);
+			//				}
 		}
 		else if (strcmp(command, "IN") == 0) {
 		}
@@ -184,18 +235,48 @@ void parseCommand() {
 	}
 }
 
-
-
 void loop() {
-	
 	/* handle timers */
 
+	static unsigned long start = micros();
+
+
+	if (pulsePin.state == 'I') { /* init*/
+		pulsePin.start = micros();
+		pulsePin.state = 'F';
+		pinMode(pulsePin.pin.number,OUTPUT);
+		digitalWrite(pulsePin.pin.number,pulsePin.firstPolarity);
+		pulsePin.pin.configured = true;
+	}
+	else if (pulsePin.state == 'F'){
+		if ((micros() - pulsePin.start) > pulsePin.firstHalf) {
+			if (pulsePin.secondHalf) {
+				/* move to second half if valid */
+				pulsePin.start = micros();
+				pulsePin.state = 'S';
+				digitalWrite(pulsePin.pin.number,pulsePin.secondPolarity);
+			}
+			else {
+				pulsePin.state = 'C'; /* complete */
+			}
+		}
+	}
+	else if (pulsePin.state == 'S'){
+		if ((micros() - pulsePin.start) > pulsePin.secondHalf) {
+			/* finish or repeat? */
+			if (pulsePin.currRepeat++ < pulsePin.repeat ){
+				pulsePin.start = micros();
+				pulsePin.state = 'F'; /* keep repeating */
+				digitalWrite(pulsePin.pin.number,pulsePin.firstPolarity);
+			}
+			else {
+				pulsePin.state = 'C'; /* complete */
+			}
+		}
+	}
 	if (Serial.available() != 0) {
 		parseCommand();
 	}
-
-
-
 }
 #if 0
 
