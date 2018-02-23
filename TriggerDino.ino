@@ -3,8 +3,6 @@
 struct PinType {
 	char type;
 	int number;
-
-	bool configured;
 };
 
 struct LevelPin {
@@ -16,8 +14,8 @@ struct PWMPin {
 	struct PinType pin;
 };
 struct PulsePin {
-	char firstPolarity;
-	char secondPolarity;
+	int firstPolarity;
+	int secondPolarity;
 	long firstHalf;
 	long secondHalf;
 	char state;
@@ -25,7 +23,10 @@ struct PulsePin {
 	int currRepeat;
 	unsigned long start;
 	struct PinType pin;
+	struct PulsePin *next;
 };
+
+struct PulsePin *pulsePinList=NULL;
 
 int read_line(char* buffer, int bufsize)
 {
@@ -65,35 +66,8 @@ int read_line(char* buffer, int bufsize)
 
 const int LINE_BUFFER_SIZE = 80; // max line length is one less than this
 
-struct PulsePin pulsePin;
-#if 0
-= {
-	.firstPolarity=HIGH,
-	.secondPolarity=LOW,
-	.firstHalf = 200,
-	.secondHalf = 100, 
-	.repeat = 5,
-	.state='F'
-};
-#endif
 void setup() {
 	Serial.begin(57600);
-
-
-	pulsePin.firstPolarity=HIGH;
-	pulsePin.secondPolarity=LOW;
-	pulsePin.firstHalf = 200;
-	pulsePin.secondHalf = 100;
-	pulsePin.repeat = 5000;
-	pulsePin.state='I';
-	pulsePin.pin.type='D';
-	pulsePin.pin.number=3;
-	pulsePin.pin.configured=false;
-	pinMode(3,OUTPUT);
-
-
-
-
 }
 
 int getPin(char *str, struct PinType *pin) {
@@ -130,7 +104,7 @@ int  validateLevel(char *str){
 	}
 	else {
 		rc = atoi(str);
-		Serial.println(rc);
+		//Serial.println(rc);
 	}
 	if ((rc != 0) && (rc !=1)) {	
 		Serial.println("Error: invalid level");
@@ -142,19 +116,17 @@ long getDuration(char *str) {
 	long rc = 1;
 	int strLen=0;
 	long multiplier=1000000; /* if units is seconds, convrt to us */
-
 	if (str == NULL) {
-		Serial.println("Error: no duration supplied");
 		rc = 0;
 	}
 	else if ((strLen=strlen(str))>=2) {
 		/* look for multiplier */
 		char lastChar = str[strLen-1];
-		if (lastChar == 'm'){
+		if ((lastChar == 'M') || (lastChar == 'm')){
 			multiplier=1000;
 			str[strLen-1]='\0';
 		}
-		else if (lastChar == 'u'){
+		else if ((lastChar == 'U') || (lastChar == 'u')){
 			multiplier=1;
 			str[strLen-1]='\0';
 		}
@@ -163,9 +135,54 @@ long getDuration(char *str) {
 	if (rc) rc = atoi(str)*multiplier;
 
 	return rc;
-
 }
+void AddToList(struct PulsePin *ppulsePin){
+	// jwd do I need to mutex protect?
 
+	if (pulsePinList == NULL) {
+		pulsePinList = ppulsePin; 
+	}
+	else {
+		struct PulsePin *ppulsePinRunner=pulsePinList;
+		while (ppulsePinRunner->next != NULL){
+			ppulsePinRunner = ppulsePinRunner->next;
+		}
+		ppulsePinRunner->next = ppulsePin;
+	}
+}
+void RemoveFromList(struct PulsePin *ppulsePin){
+	// jwd do I need to mutex protect?
+
+	if ((pulsePinList == NULL) || (ppulsePin == NULL)) {
+		/* error need to return code*/
+	Serial.println("error nothing to remove");
+	}
+	else {
+		struct PulsePin *ppulsePinRunner=pulsePinList;
+
+		/* check if first value */
+		if (ppulsePinRunner == ppulsePin) {
+			/* found it*/
+			
+			pulsePinList = ppulsePinRunner->next;
+			free(ppulsePin);
+		}
+		else {
+			do {
+				if (ppulsePinRunner->next == ppulsePin) {
+					/* found it*/
+					ppulsePinRunner = ppulsePin->next;
+					free(ppulsePin);
+					break;
+				}
+				else {
+					ppulsePinRunner = ppulsePinRunner->next;
+				}
+			} while(ppulsePinRunner!=NULL);		
+		}
+
+	}
+}
 void parseCommand() {
 	char command[LINE_BUFFER_SIZE];
 	char * pch;
@@ -180,7 +197,6 @@ void parseCommand() {
 		command[i]=toupper(command[i]);
 	}
 
-
 	pch = strtok (command," ");
 	while (pch != NULL)
 	{
@@ -193,36 +209,39 @@ void parseCommand() {
 			if ((level = validateLevel(pch)) >= 0){
 				if (pin.type == 'D') {
 					pinMode(pin.number,OUTPUT);
-					digitalWrite(pin.number,(level==0)?LOW:HIGH);
+					digitalWrite(pin.number,level);
 				}
 			}
 		}
 		else if (strcmp(pch, "PULSE") == 0) {
-			int level, repeat;
-			long pulseDuration;
-			long postDuration=0;
-			pch = strtok (NULL, " ");
-			if ((level = validateLevel(pch)) < 0){
+			struct PulsePin *ppulsePin = (struct PulsePin *)malloc(sizeof(struct PulsePin));	
+			if (ppulsePin == NULL) {
+				Serial.println("failed to allocate memory ");
+			}
+			else if ((ppulsePin->firstPolarity = validateLevel(pch = strtok (NULL, " "))) < 0){
 
 			}
-			else if (( pulseDuration = getDuration(pch = strtok (NULL, " "))) < 0){
+			else if (( ppulsePin->firstHalf = getDuration(pch = strtok (NULL, " "))) < 0){
 				Serial.print("error pulseDuration: ");
 			}
-			else if (( postDuration = getDuration(pch = strtok (NULL, " "))) < 0){
+			else if (( ppulsePin->secondHalf = getDuration(pch = strtok (NULL, " "))) < 0){
 				Serial.print("error postDuration: ");
 			}
 			else {
-				repeat = atoi(pch = strtok (NULL, " "));
+				ppulsePin->repeat = atoi(pch = strtok (NULL, " "));
+				//ppulsePin->secondPolarity=(ppulsepin->firstPolarity==LOW)?HIGH:LOW;
+				ppulsePin->secondPolarity=!(ppulsePin->firstPolarity);
+				ppulsePin->currRepeat = 0;
+				ppulsePin->state='I';
+				ppulsePin->next = NULL;
+				ppulsePin->pin.number=pin.number;
+				ppulsePin->pin.type=pin.type;
+				AddToList(ppulsePin);
 			}
-			Serial.print("pulseDuration: ");Serial.println(pulseDuration);
-			Serial.print("postDuration: ");Serial.println(postDuration);
-			Serial.print("repeat: ");Serial.println(repeat);
-
-
-			//				if (pin.type == 'D') {
-			//					pinMode(pin.number,OUTPUT);
-			//					digitalWrite(pin.number,(level==0)?LOW:HIGH);
-			//				}
+			//Serial.print("firstPolarity: ");Serial.println(ppulsePin->firstPolarity);
+			//Serial.print("pulseDuration: ");Serial.println(ppulsePin->firstHalf);
+			//Serial.print("postDuration: ");Serial.println(ppulsePin->secondHalf);
+			//Serial.print("repeat: ");Serial.println(ppulsePin->repeat);
 		}
 		else if (strcmp(command, "IN") == 0) {
 		}
@@ -235,45 +254,53 @@ void parseCommand() {
 	}
 }
 
+void HandleTimers(struct PulsePin *pinList) {
+	struct PulsePin *ppulsePinRunner = pinList;
+	while (ppulsePinRunner != NULL) {
+		if (ppulsePinRunner->state == 'I') { /* init*/
+			ppulsePinRunner->start = micros();
+			ppulsePinRunner->state = 'F';
+			pinMode(ppulsePinRunner->pin.number,OUTPUT);
+			digitalWrite(ppulsePinRunner->pin.number,ppulsePinRunner->firstPolarity);
+		}
+		else if (ppulsePinRunner->state == 'F'){
+			if ((micros() - ppulsePinRunner->start) > ppulsePinRunner->firstHalf) {
+				digitalWrite(ppulsePinRunner->pin.number,ppulsePinRunner->secondPolarity);
+				if (ppulsePinRunner->secondHalf) {
+					/* move to second half if valid */
+					ppulsePinRunner->start = micros();
+					ppulsePinRunner->state = 'S';
+				}
+				else {
+					ppulsePinRunner->state = 'C'; /* complete */
+					RemoveFromList(ppulsePinRunner);
+				}
+			}
+		}
+		else if (ppulsePinRunner->state == 'S'){
+			if ((micros() - ppulsePinRunner->start) > ppulsePinRunner->secondHalf) {
+				/* finish or repeat? */
+				if (++ppulsePinRunner->currRepeat < ppulsePinRunner->repeat ){
+					ppulsePinRunner->start = micros();
+					ppulsePinRunner->state = 'F'; /* keep repeating */
+					digitalWrite(ppulsePinRunner->pin.number,ppulsePinRunner->firstPolarity);
+				}
+				else {
+					ppulsePinRunner->state = 'C'; /* complete */
+					RemoveFromList(ppulsePinRunner);
+				}
+			}
+		}
+		ppulsePinRunner=ppulsePinRunner->next;
+	}
+}
+
+
 void loop() {
 	/* handle timers */
 
-	static unsigned long start = micros();
+	HandleTimers(pulsePinList);
 
-
-	if (pulsePin.state == 'I') { /* init*/
-		pulsePin.start = micros();
-		pulsePin.state = 'F';
-		pinMode(pulsePin.pin.number,OUTPUT);
-		digitalWrite(pulsePin.pin.number,pulsePin.firstPolarity);
-		pulsePin.pin.configured = true;
-	}
-	else if (pulsePin.state == 'F'){
-		if ((micros() - pulsePin.start) > pulsePin.firstHalf) {
-			if (pulsePin.secondHalf) {
-				/* move to second half if valid */
-				pulsePin.start = micros();
-				pulsePin.state = 'S';
-				digitalWrite(pulsePin.pin.number,pulsePin.secondPolarity);
-			}
-			else {
-				pulsePin.state = 'C'; /* complete */
-			}
-		}
-	}
-	else if (pulsePin.state == 'S'){
-		if ((micros() - pulsePin.start) > pulsePin.secondHalf) {
-			/* finish or repeat? */
-			if (pulsePin.currRepeat++ < pulsePin.repeat ){
-				pulsePin.start = micros();
-				pulsePin.state = 'F'; /* keep repeating */
-				digitalWrite(pulsePin.pin.number,pulsePin.firstPolarity);
-			}
-			else {
-				pulsePin.state = 'C'; /* complete */
-			}
-		}
-	}
 	if (Serial.available() != 0) {
 		parseCommand();
 	}
